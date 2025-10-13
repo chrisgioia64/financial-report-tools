@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Downloaded files
+*.pdf
+web_downloads/
+zip_compare_uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment variables (may contain API keys)
+.env
+
+# Test files
+test_*.pdf
+final_test.pdf
+
+# Excel files (may be locked)
+*.xlsx
+*.xls
+~$*.xlsx

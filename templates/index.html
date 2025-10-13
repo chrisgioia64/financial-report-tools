@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Report Downloader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 16px;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 14px;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+            min-height: 200px;
+            transition: border-color 0.3s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .source-select {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .source-option {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .source-option input[type="radio"] {
+            display: none;
+        }
+
+        .source-option label {
+            display: block;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .source-option input[type="radio"]:checked + label {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+
+        .source-option label:hover {
+            border-color: #667eea;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 18px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .progress-header {
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.5s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .progress-text {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .results {
+            margin-top: 20px;
+        }
+
+        .result-item {
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+
+        .result-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .result-failed {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        .download-buttons {
+            display: none;
+            margin-top: 20px;
+            gap: 10px;
+        }
+
+        .download-buttons.active {
+            display: flex;
+        }
+
+        .download-btn {
+            flex: 1;
+            padding: 12px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            text-align: center;
+            transition: background 0.3s;
+        }
+
+        .download-btn:hover {
+            background: #218838;
+        }
+
+        .example-text {
+            font-size: 13px;
+            color: #666;
+            margin-top: 8px;
+            font-style: italic;
+        }
+
+        .fac-details {
+            margin-top: 8px;
+            padding: 10px;
+            background: #e8f5e9;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+
+        .fac-details-header {
+            font-weight: 600;
+            color: #2e7d32;
+            margin-bottom: 5px;
+        }
+
+        .fac-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #c8e6c9;
+        }
+
+        .fac-entry:last-child {
+            border-bottom: none;
+        }
+
+        .fac-entry-downloaded {
+            background: #fff9c4;
+            padding: 5px;
+            border-radius: 3px;
+            margin-top: 2px;
+        }
+
+        .toggle-details {
+            color: #667eea;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 8px;
+            text-decoration: underline;
+        }
+
+        .toggle-details:hover {
+            color: #764ba2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📄 Financial Report Downloader</h1>
+            <p>Download financial reports from multiple sources</p>
+        </div>
+
+        <div class="content">
+            <form id="downloadForm">
+                <div class="form-group">
+                    <label for="entities">Enter Entity Names (one per line):</label>
+                    <textarea
+                        id="entities"
+                        name="entities"
+                        placeholder="Housing Authority of the City of Oakland&#10;Housing Authority of the City of Los Angeles&#10;Housing Authority of the County of Alameda"
+                        required
+                    ></textarea>
+                    <div class="example-text">
+                        Example: Housing Authority of the City of Oakland
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Select Data Source:</label>
+                    <div class="source-select">
+                        <div class="source-option">
+                            <input type="radio" id="source-fac" name="source" value="fac" checked>
+                            <label for="source-fac">FAC API</label>
+                        </div>
+                        <div class="source-option">
+                            <input type="radio" id="source-google" name="source" value="google">
+                            <label for="source-google">Google</label>
+                        </div>
+                        <div class="source-option">
+                            <input type="radio" id="source-emma" name="source" value="emma">
+                            <label for="source-emma">EMMA</label>
+                        </div>
+                        <div class="source-option">
+                            <input type="radio" id="source-all" name="source" value="all">
+                            <label for="source-all">All Sources</label>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn" id="downloadBtn">
+                    Start Download
+                </button>
+            </form>
+
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-header">Download Progress</div>
+                <div class="progress-bar">
+                    <div class="progress-bar-fill" id="progressBar">0%</div>
+                </div>
+                <div class="progress-text" id="progressText">Initializing...</div>
+
+                <div class="results" id="results"></div>
+
+                <div class="download-buttons" id="downloadButtons">
+                    <a href="#" class="download-btn" id="downloadZip">
+                        📦 Download All as ZIP
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let sessionId = null;
+        let statusInterval = null;
+
+        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const entities = document.getElementById('entities').value;
+            const source = document.querySelector('input[name="source"]:checked').value;
+
+            // Disable button
+            const btn = document.getElementById('downloadBtn');
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
+
+            // Show progress container
+            document.getElementById('progressContainer').style.display = 'block';
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('downloadButtons').classList.remove('active');
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ entities, source })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    btn.disabled = false;
+                    btn.textContent = 'Start Download';
+                    return;
+                }
+
+                sessionId = data.session_id;
+
+                // Start polling for status
+                statusInterval = setInterval(checkStatus, 1000);
+
+            } catch (error) {
+                alert('Error: ' + error.message);
+                btn.disabled = false;
+                btn.textContent = 'Start Download';
+            }
+        });
+
+        async function checkStatus() {
+            if (!sessionId) return;
+
+            try {
+                const response = await fetch(`/status/${sessionId}`);
+                const status = await response.json();
+
+                // Update progress bar
+                const percent = Math.round((status.current / status.total) * 100);
+                document.getElementById('progressBar').style.width = percent + '%';
+                document.getElementById('progressBar').textContent = percent + '%';
+
+                // Update progress text
+                if (status.in_progress) {
+                    document.getElementById('progressText').textContent =
+                        `Processing ${status.current} of ${status.total}: ${status.current_entity}`;
+                } else {
+                    document.getElementById('progressText').textContent =
+                        `Complete! ${status.successful.length} succeeded, ${status.failed.length} failed`;
+                }
+
+                // Update results
+                const resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML = '';
+
+                status.successful.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item result-success';
+
+                    let innerHTML = `✓ ${item.entity} <small>(Source: ${item.source.toUpperCase()})</small>`;
+
+                    // If source is FAC and we have details, show them
+                    if (item.source === 'fac' && status.fac_details && status.fac_details[item.entity]) {
+                        const facData = status.fac_details[item.entity];
+                        const detailsId = `details-${item.entity.replace(/\s+/g, '-')}`;
+
+                        innerHTML += `<span class="toggle-details" onclick="document.getElementById('${detailsId}').style.display = document.getElementById('${detailsId}').style.display === 'none' ? 'block' : 'none'">Show Details</span>`;
+                        innerHTML += `<div id="${detailsId}" class="fac-details" style="display: none;">`;
+                        innerHTML += `<div class="fac-details-header">Found ${facData.found_count} audit(s) in FAC:</div>`;
+
+                        facData.all_entries.forEach((entry, idx) => {
+                            const isDownloaded = facData.downloaded_entry && entry.report_id === facData.downloaded_entry.report_id;
+                            const entryClass = isDownloaded ? 'fac-entry fac-entry-downloaded' : 'fac-entry';
+                            const downloadedMark = isDownloaded ? ' ⬇️ <strong>DOWNLOADED</strong>' : '';
+                            innerHTML += `<div class="${entryClass}">
+                                ${idx + 1}. ${entry.auditee_name}<br>
+                                &nbsp;&nbsp;&nbsp;&nbsp;FY: ${entry.fiscal_year} | Report ID: ${entry.report_id}${downloadedMark}
+                            </div>`;
+                        });
+
+                        innerHTML += `</div>`;
+                    }
+
+                    div.innerHTML = innerHTML;
+                    resultsDiv.appendChild(div);
+                });
+
+                status.failed.forEach(entity => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item result-failed';
+                    div.textContent = `✗ ${entity} - Not found`;
+                    resultsDiv.appendChild(div);
+                });
+
+                // If complete, stop polling and enable download
+                if (!status.in_progress) {
+                    clearInterval(statusInterval);
+                    document.getElementById('downloadBtn').disabled = false;
+                    document.getElementById('downloadBtn').textContent = 'Start Download';
+
+                    if (status.successful.length > 0) {
+                        document.getElementById('downloadButtons').classList.add('active');
+                        document.getElementById('downloadZip').href = `/download_zip/${sessionId}`;
+                    }
+                }
+
+            } catch (error) {
+                console.error('Error checking status:', error);
+            }
+        }
+    </script>
+</body>
+</html>
