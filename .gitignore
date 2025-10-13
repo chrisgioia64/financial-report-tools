@@ -10,8 +10,10 @@ ENV/
 
 # Downloaded files
 *.pdf
+*.zip
 web_downloads/
 zip_compare_uploads/
+revenue_uploads/temp_*/
 
 # IDE
 .vscode/
