@@ -12,6 +12,7 @@ import zipfile
 import io
 from datetime import datetime
 import threading
+import csv
 
 # Import the search functions
 from download_financial_report import search_fac_api, search_google, search_emma
@@ -26,13 +27,13 @@ DOWNLOAD_FOLDER.mkdir(exist_ok=True)
 download_status = {}
 
 
-def process_entities(entities_list, source='fac', session_id=''):
+def process_entities(entities_list, sources=None, session_id=''):
     """
     Process a list of entities and download their reports.
 
     Args:
         entities_list: List of entity names
-        source: Which source to use ('fac', 'google', 'emma', or 'all')
+        sources: List of sources to try (e.g., ['fac', 'emma']) or None for default
         session_id: Unique session identifier
     """
     global download_status
@@ -56,10 +57,11 @@ def process_entities(entities_list, source='fac', session_id=''):
         'emma': search_emma
     }
 
-    if source == 'all':
-        source_list = ['fac', 'google', 'emma']
+    # Use provided sources or default to FAC only
+    if sources is None or len(sources) == 0:
+        source_list = ['fac']
     else:
-        source_list = [source]
+        source_list = sources
 
     for idx, entity_name in enumerate(entities_list, 1):
         entity_name = entity_name.strip()
@@ -126,7 +128,7 @@ def download():
     """Handle download request."""
     data = request.json
     entities_text = data.get('entities', '')
-    source = data.get('source', 'fac')
+    sources = data.get('sources', ['fac'])  # Get array of sources
 
     # Split by newlines and filter empty lines
     entities_list = [e.strip() for e in entities_text.split('\n') if e.strip()]
@@ -140,7 +142,7 @@ def download():
     # Start download process in background thread
     thread = threading.Thread(
         target=process_entities,
-        args=(entities_list, source, session_id)
+        args=(entities_list, sources, session_id)
     )
     thread.daemon = True
     thread.start()
@@ -160,9 +162,71 @@ def status(session_id):
     return jsonify(download_status[session_id])
 
 
+def generate_csv_report(session_id):
+    """
+    Generate CSV report of download status.
+
+    Args:
+        session_id: Unique session identifier
+
+    Returns:
+        String containing CSV data
+    """
+    if session_id not in download_status:
+        return None
+
+    status = download_status[session_id]
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow(['Entity Name', 'Status', 'Filename', 'Source'])
+
+    # Write successful downloads
+    for item in status['successful']:
+        writer.writerow([
+            item['entity'],
+            'Success',
+            item['filename'],
+            item['source'].upper()
+        ])
+
+    # Write failed downloads
+    for entity in status['failed']:
+        writer.writerow([
+            entity,
+            'Failed',
+            'N/A',
+            'N/A'
+        ])
+
+    return output.getvalue()
+
+
+@app.route('/download_csv/<session_id>')
+def download_csv(session_id):
+    """Download CSV report of download status."""
+    csv_data = generate_csv_report(session_id)
+
+    if csv_data is None:
+        return "Session not found", 404
+
+    # Create in-memory file
+    memory_file = io.BytesIO()
+    memory_file.write(csv_data.encode('utf-8'))
+    memory_file.seek(0)
+
+    return send_file(
+        memory_file,
+        mimetype='text/csv',
+        as_attachment=True,
+        download_name=f'download_report_{session_id}.csv'
+    )
+
+
 @app.route('/download_zip/<session_id>')
 def download_zip(session_id):
-    """Download all PDFs as a ZIP file."""
+    """Download all PDFs as a ZIP file with CSV report."""
     session_folder = DOWNLOAD_FOLDER / session_id
 
     if not session_folder.exists():
@@ -172,8 +236,14 @@ def download_zip(session_id):
     memory_file = io.BytesIO()
 
     with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        # Add all PDF files
         for pdf_file in session_folder.glob('*.pdf'):
             zf.write(pdf_file, pdf_file.name)
+
+        # Add CSV report
+        csv_data = generate_csv_report(session_id)
+        if csv_data:
+            zf.writestr(f'download_report_{session_id}.csv', csv_data)
 
     memory_file.seek(0)
 

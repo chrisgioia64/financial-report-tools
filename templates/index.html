@@ -88,7 +88,7 @@
             min-width: 150px;
         }
 
-        .source-option input[type="radio"] {
+        .source-option input[type="checkbox"] {
             display: none;
         }
 
@@ -103,7 +103,7 @@
             font-weight: 500;
         }
 
-        .source-option input[type="radio"]:checked + label {
+        .source-option input[type="checkbox"]:checked + label {
             background: #667eea;
             color: white;
             border-color: #667eea;
@@ -308,23 +308,19 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Select Data Source:</label>
+                    <label>Select Data Sources (try in order selected):</label>
                     <div class="source-select">
                         <div class="source-option">
-                            <input type="radio" id="source-fac" name="source" value="fac" checked>
+                            <input type="checkbox" id="source-fac" name="source" value="fac" checked>
                             <label for="source-fac">FAC API</label>
                         </div>
                         <div class="source-option">
-                            <input type="radio" id="source-google" name="source" value="google">
-                            <label for="source-google">Google</label>
-                        </div>
-                        <div class="source-option">
-                            <input type="radio" id="source-emma" name="source" value="emma">
+                            <input type="checkbox" id="source-emma" name="source" value="emma">
                             <label for="source-emma">EMMA</label>
                         </div>
                         <div class="source-option">
-                            <input type="radio" id="source-all" name="source" value="all">
-                            <label for="source-all">All Sources</label>
+                            <input type="checkbox" id="source-google" name="source" value="google">
+                            <label for="source-google">Google</label>
                         </div>
                     </div>
                 </div>
@@ -360,7 +356,17 @@
             e.preventDefault();
 
             const entities = document.getElementById('entities').value;
-            const source = document.querySelector('input[name="source"]:checked').value;
+
+            // Get all checked sources
+            const checkedSources = Array.from(document.querySelectorAll('input[name="source"]:checked'))
+                .map(cb => cb.value);
+
+            if (checkedSources.length === 0) {
+                alert('Please select at least one data source');
+                return;
+            }
+
+            const sources = checkedSources;
 
             // Disable button
             const btn = document.getElementById('downloadBtn');
@@ -378,7 +384,7 @@
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ entities, source })
+                    body: JSON.stringify({ entities, sources })
                 });
 
                 const data = await response.json();

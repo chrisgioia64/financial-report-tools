@@ -31,14 +31,30 @@ def sanitize_filename(name: str) -> str:
     return safe_name.strip('_')
 
 
-def download_file(url: str, filename: str) -> bool:
-    """Download a file from URL and save it."""
+def download_file(url: str, filename: str, driver=None) -> bool:
+    """Download a file from URL and save it. If driver is provided, uses browser session."""
     try:
         print(f"  Downloading from: {url}")
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=30, stream=True)
+
+        if driver:
+            # Use Selenium driver to download with browser session/cookies
+            # Get cookies from Selenium and use them with requests
+            cookies = driver.get_cookies()
+            session = requests.Session()
+            for cookie in cookies:
+                session.cookies.set(cookie['name'], cookie['value'])
+
+            headers = {
+                'User-Agent': driver.execute_script("return navigator.userAgent;")
+            }
+            response = session.get(url, headers=headers, timeout=30, stream=True)
+        else:
+            # Standard download without browser session
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            response = requests.get(url, headers=headers, timeout=30, stream=True)
+
         response.raise_for_status()
 
         # Check if it's actually a PDF
@@ -115,7 +131,8 @@ def search_fac_api(entity_name: str, output_filename: str, return_metadata: bool
         # Extract key identifying words (remove common filler words)
         common_words = {'the', 'of', 'and', 'a', 'an', 'for', 'in', 'at', 'to', 'by'}
         words = expanded_name.split()
-        key_words = [w for w in words if w not in common_words and len(w) > 2]
+        # Remove apostrophes from words to handle variations like "america's" vs "americas"
+        key_words = [w.replace("'", "") for w in words if w not in common_words and len(w.replace("'", "")) > 2]
 
         # Build search patterns
         search_patterns = [
@@ -148,6 +165,9 @@ def search_fac_api(entity_name: str, output_filename: str, return_metadata: bool
                 else:
                     other_words.append(word)
 
+            # Initialize reordered_pattern to flexible_pattern by default
+            reordered_pattern = flexible_pattern
+
             # If we have both entity type and location words, try entity type first
             if entity_type_words and other_words:
                 # Rearrange: entity type words first, then location words
@@ -155,6 +175,21 @@ def search_fac_api(entity_name: str, output_filename: str, return_metadata: bool
                 reordered_pattern = '%'.join(reordered_escaped)
                 if reordered_pattern != flexible_pattern:
                     search_patterns.append(f"auditee_name=ilike.%{reordered_pattern}%")
+
+            # Strategy 2c: Individual word matching (most flexible - handles any word order)
+            # Build a pattern that requires all key words but doesn't care about order
+            # This is done by creating multiple wildcards: %word1%word2%word3%
+            # But we make it even more flexible by ensuring each word appears independently
+            if len(key_words) >= 2:
+                # Create a search that checks each word independently with AND logic
+                # Use double wildcards to allow any words in between
+                individual_escaped = [w.replace("'", "''") for w in key_words]
+                # For PostgreSQL, we can use multiple ilike conditions combined with AND
+                # But PostgREST uses a different syntax, so we'll use a very loose pattern
+                # with lots of wildcards that allows words in any order
+                loose_pattern = '%%'.join(individual_escaped)  # Double wildcard allows words between
+                if loose_pattern != flexible_pattern and loose_pattern != reordered_pattern:
+                    search_patterns.append(f"auditee_name=ilike.%{loose_pattern}%")
 
         # Remove None values
         search_patterns = [p for p in search_patterns if p]
@@ -464,6 +499,7 @@ def search_google(entity_name: str, output_filename: str) -> bool:
 def search_emma(entity_name: str, output_filename: str, state: str = "CA") -> bool:
     """
     Search EMMA (Electronic Municipal Market Access) for financial disclosures using Selenium.
+    Uses the state-specific issuer page for more targeted searching.
     Website: https://emma.msrb.org
     """
     print(f"\n[3] Searching EMMA (Municipal Securities Rulemaking Board)...")
@@ -491,11 +527,22 @@ def search_emma(entity_name: str, output_filename: str, state: str = "CA") -> bo
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--window-size=1920,1080")
 
+        # Configure Chrome to automatically download PDFs
+        download_dir = str(Path.cwd().absolute())
+        prefs = {
+            "download.default_directory": download_dir,
+            "download.prompt_for_download": False,
+            "download.directory_upgrade": True,
+            "plugins.always_open_pdf_externally": True,  # Download PDFs instead of opening
+            "safebrowsing.enabled": True
+        }
+        chrome_options.add_experimental_option("prefs", prefs)
+
         # Create driver
         driver = webdriver.Chrome(options=chrome_options)
 
-        # Navigate to EMMA main search page
-        emma_url = "https://emma.msrb.org/"
+        # Navigate to EMMA state-specific issuer page
+        emma_url = f"https://emma.msrb.org/IssuerHomePage/State?state={state}"
         print(f"  Navigating to: {emma_url}")
         driver.get(emma_url)
 
@@ -503,123 +550,390 @@ def search_emma(entity_name: str, output_filename: str, state: str = "CA") -> bo
         wait = WebDriverWait(driver, 20)
         time.sleep(3)
 
-        # Find and click on "Search" or "Issuers" to get to search functionality
-        print(f"  Looking for search functionality...")
-
-        # Try to find the main search box
+        # Check for and handle license agreement if present
         try:
-            # Look for search input - EMMA typically has a search box on the main page
-            search_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='text'], input[type='search']")
+            print(f"  Checking for license agreement...")
 
-            search_box = None
-            for inp in search_inputs:
-                # Find a visible search box
-                if inp.is_displayed():
-                    search_box = inp
-                    break
+            # First, check if there are any iframes on the page
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+            print(f"  DEBUG: Found {len(iframes)} iframe(s)")
 
-            if not search_box:
-                # Try clicking on search/issuer links
-                try:
-                    search_link = driver.find_element(By.LINK_TEXT, "Issuers")
-                    search_link.click()
-                    time.sleep(2)
-                    search_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='text'], input[type='search']")))
-                except:
-                    pass
+            # Try to find and click the specific Accept button
+            accept_button = None
+            button_found_in_frame = False
 
-            if search_box:
-                print(f"  Searching for: {entity_name}")
-                search_box.clear()
-                search_box.send_keys(entity_name)
-                search_box.send_keys(Keys.RETURN)
-                time.sleep(4)  # Wait for results to load
-
-                # Look for the entity in search results
-                print("  Analyzing search results...")
-
-                # Find links that contain the entity name
-                all_links = driver.find_elements(By.TAG_NAME, "a")
-                entity_keywords = set(entity_name.lower().split()) - {'of', 'the', 'a'}
-
-                # Identify critical keywords that must match exactly (city/county names)
-                entity_lower = entity_name.lower()
-                critical_keywords = []
-                for keyword in entity_keywords:
-                    # Cities, counties, and unique identifiers must match exactly
-                    if keyword not in ['housing', 'authority', 'city', 'county']:
-                        critical_keywords.append(keyword)
-
-                for link in all_links:
+            # First try in the main page
+            try:
+                accept_button = driver.find_element(By.CSS_SELECTOR, "#ctl00_mainContentArea_disclaimerContent_yesButton")
+                print(f"  Found Accept button in main page with selector: #ctl00_mainContentArea_disclaimerContent_yesButton")
+            except:
+                # If not in main page, try each iframe
+                for idx, iframe in enumerate(iframes):
                     try:
-                        link_text = link.text.lower()
-                        href = link.get_attribute("href") or ""
-
-                        # Check if ALL critical keywords are present
-                        has_all_critical = all(keyword in link_text for keyword in critical_keywords)
-
-                        if not has_all_critical:
+                        print(f"  Checking iframe {idx + 1}...")
+                        driver.switch_to.frame(iframe)
+                        try:
+                            accept_button = driver.find_element(By.CSS_SELECTOR, "#ctl00_mainContentArea_disclaimerContent_yesButton")
+                            print(f"  Found Accept button in iframe {idx + 1}")
+                            button_found_in_frame = True
+                            break
+                        except:
+                            driver.switch_to.default_content()
                             continue
-
-                        # Check if link matches entity overall
-                        matches = sum(1 for keyword in entity_keywords if keyword in link_text)
-                        if matches >= len(entity_keywords) * 0.6:  # 60% of keywords match
-                            print(f"  Found potential match: {link.text[:80]}")
-
-                            # Click on the entity link
-                            link.click()
-                            time.sleep(3)
-
-                            # Now look for continuing disclosure documents
-                            print("  Looking for financial disclosure documents...")
-
-                            # Try to find links to continuing disclosure or financial reports
-                            disclosure_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Continuing Disclosure")
-                            if not disclosure_links:
-                                disclosure_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Financial")
-                            if not disclosure_links:
-                                disclosure_links = driver.find_elements(By.PARTIAL_LINK_TEXT, "Annual Report")
-
-                            for disc_link in disclosure_links[:3]:
-                                try:
-                                    disc_link.click()
-                                    time.sleep(3)
-
-                                    # Look for PDF links with CAFR/ACFR
-                                    pdf_links = driver.find_elements(By.XPATH, "//a[contains(@href, '.pdf')]")
-
-                                    for pdf_link in pdf_links[:10]:
-                                        try:
-                                            pdf_text = pdf_link.text.lower()
-                                            pdf_href = pdf_link.get_attribute("href")
-
-                                            # Check if it's a CAFR/ACFR
-                                            if any(term in pdf_text for term in ['cafr', 'acfr', 'comprehensive', 'annual financial']):
-                                                print(f"    Found report: {pdf_text[:60]}...")
-
-                                                if pdf_href and download_file(pdf_href, output_filename):
-                                                    file_size = Path(output_filename).stat().st_size
-                                                    if file_size > 100000:
-                                                        driver.quit()
-                                                        return True
-                                        except:
-                                            continue
-
-                                    driver.back()
-                                    time.sleep(2)
-                                except:
-                                    continue
-
-                            # If we didn't find anything, go back and try next result
-                            driver.back()
-                            time.sleep(2)
-                            break  # Only try first good match
-
                     except:
+                        driver.switch_to.default_content()
                         continue
 
+            if accept_button:
+                print(f"  Clicking Accept button...")
+                try:
+                    # Scroll the button into view
+                    driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", accept_button)
+                    time.sleep(1)  # Give time for scroll to complete
+
+                    # Try clicking with JavaScript if normal click fails
+                    try:
+                        wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#ctl00_mainContentArea_disclaimerContent_yesButton")))
+                        accept_button.click()
+                    except:
+                        # If normal click fails, use JavaScript click
+                        print(f"  Normal click failed, using JavaScript click...")
+                        driver.execute_script("arguments[0].click();", accept_button)
+
+                    print(f"  Accept button clicked successfully")
+
+                    # Switch back to default content if we were in an iframe
+                    if button_found_in_frame:
+                        driver.switch_to.default_content()
+
+                    print(f"  Waiting for page to load after accepting...")
+
+                    # Wait for the issuer search page to load by waiting for the search box to appear
+                    try:
+                        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "#lvIssuers_filter input")))
+                        print(f"  License agreement accepted and search page loaded")
+                    except Exception as e:
+                        print(f"  Waiting additional time for page to fully load...")
+                        time.sleep(5)
+                except Exception as e:
+                    print(f"  Error clicking Accept button: {e}")
+                    if button_found_in_frame:
+                        driver.switch_to.default_content()
+            else:
+                print(f"  WARNING: Could not find Accept button with selector #ctl00_mainContentArea_disclaimerContent_yesButton")
+                print(f"  The license agreement may have already been accepted or the page structure has changed")
         except Exception as e:
-            print(f"  Error navigating EMMA: {e}")
+            print(f"  Error handling license agreement: {e}")
+            import traceback
+            traceback.print_exc()
+            # Make sure we're back to default content
+            try:
+                driver.switch_to.default_content()
+            except:
+                pass
+
+        # Find the search input box using the specific selector
+        print(f"  Looking for search input box...")
+        try:
+            # Wait longer for the search box to appear after accepting license
+            search_box = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "#lvIssuers_filter input")))
+            print(f"  Found search box, searching for: {entity_name}")
+
+            # Clear and enter the search query
+            search_box.clear()
+            search_box.send_keys(entity_name)
+
+            # Wait for the table to filter
+            time.sleep(2)
+
+            # Count the number of results
+            # The filtered results should be visible rows in the table
+            try:
+                # Look for visible table rows (not including the header)
+                visible_rows = driver.find_elements(By.CSS_SELECTOR, "#lvIssuers tbody tr")
+
+                # Filter out rows that are hidden (display: none)
+                actual_results = [row for row in visible_rows if row.is_displayed() and row.get_attribute("style") != "display: none;"]
+
+                result_count = len(actual_results)
+                print(f"  Found {result_count} matching result(s)")
+
+                if result_count == 0:
+                    print("  No results found for this entity")
+                    return False
+
+                # If there's exactly one result, click on it
+                if result_count == 1:
+                    print("  Single result found - clicking on the link...")
+                    # Find the link in the first (and only) result row
+                    try:
+                        link = actual_results[0].find_element(By.TAG_NAME, "a")
+                        link_text = link.text
+                        print(f"  Clicking on: {link_text}")
+                        link.click()
+                        time.sleep(3)
+
+                        # Look for the "Financial Disclosures" tab
+                        print("  Looking for Financial Disclosures tab...")
+                        try:
+                            # Try to find the Financial Disclosures tab/link
+                            financial_tab = None
+                            try:
+                                financial_tab = driver.find_element(By.PARTIAL_LINK_TEXT, "Financial Disclosures")
+                            except:
+                                try:
+                                    financial_tab = driver.find_element(By.PARTIAL_LINK_TEXT, "Financial Disclosure")
+                                except:
+                                    try:
+                                        financial_tab = driver.find_element(By.LINK_TEXT, "FINANCIAL DISCLOSURES")
+                                    except:
+                                        pass
+
+                            if financial_tab:
+                                print(f"  Found Financial Disclosures tab - clicking...")
+                                financial_tab.click()
+                                time.sleep(3)
+
+                                # Look for all PDF links on the page
+                                print("  Searching for PDF documents...")
+                                pdf_links = driver.find_elements(By.XPATH, "//a[contains(@href, '.pdf')]")
+
+                                print(f"  Found {len(pdf_links)} PDF document(s)")
+
+                                if len(pdf_links) > 0:
+                                    # Filter PDFs to find actual financial reports
+                                    # Keywords that indicate a financial report
+                                    financial_keywords = [
+                                        'cafr', 'acfr', 'annual financial', 'comprehensive annual',
+                                        'financial statement', 'audit report', 'audited financial',
+                                        'basic financial', 'financial report'
+                                    ]
+
+                                    # Keywords that indicate help/info documents to skip
+                                    skip_keywords = [
+                                        'fact sheet', 'help', 'guide', 'instruction', 'tutorial',
+                                        'customizing', 'homepage', 'user guide', 'how to'
+                                    ]
+
+                                    # Score each PDF based on relevance
+                                    scored_pdfs = []
+                                    for idx, pdf_link in enumerate(pdf_links):
+                                        try:
+                                            pdf_text = pdf_link.text.lower()
+                                            pdf_href = pdf_link.get_attribute("href").lower()
+                                            combined_text = f"{pdf_text} {pdf_href}"
+
+                                            # Skip if it's a help document
+                                            if any(skip_word in combined_text for skip_word in skip_keywords):
+                                                print(f"    Skipping help document: {pdf_link.text[:60]}...")
+                                                continue
+
+                                            # Calculate relevance score
+                                            score = 0
+                                            for keyword in financial_keywords:
+                                                if keyword in combined_text:
+                                                    score += 10
+
+                                            # Bonus points for being from EMMA domain (not msrb.org help docs)
+                                            if 'emma.msrb.org' in pdf_href:
+                                                score += 5
+
+                                            # Store the PDF with its score
+                                            scored_pdfs.append((score, idx, pdf_link, pdf_text, pdf_href))
+
+                                            print(f"    PDF {idx + 1}: {pdf_link.text[:60]}... (score: {score})")
+
+                                        except Exception as e:
+                                            continue
+
+                                    # Sort by score (descending)
+                                    scored_pdfs.sort(key=lambda x: -x[0])
+
+                                    if scored_pdfs:
+                                        print(f"  Found {len(scored_pdfs)} relevant PDF(s) after filtering")
+
+                                        # Try to download the highest-scored PDF
+                                        # Since EMMA blocks direct downloads, we'll click the link and let browser handle it
+                                        for score, idx, pdf_link, pdf_text, pdf_href in scored_pdfs:
+                                            if score > 0:  # Only try PDFs with positive score
+                                                # Get link text early to avoid stale element errors
+                                                try:
+                                                    link_display_text = pdf_link.text[:80] if pdf_link.text else "..."
+                                                except:
+                                                    link_display_text = "..."
+
+                                                print(f"  Attempting to access: {link_display_text} (score: {score})")
+                                                try:
+                                                    # Get the original href
+                                                    original_href = pdf_link.get_attribute("href")
+                                                    print(f"    URL: {original_href[:100]}...")
+
+                                                    # Click the link to open/download the PDF
+                                                    pdf_link.click()
+                                                    print(f"    Clicked PDF link, waiting for download...")
+
+                                                    # Extract the PDF filename from URL
+                                                    pdf_filename = Path(original_href).name
+                                                    download_path = Path.cwd() / pdf_filename
+
+                                                    # Wait for download to complete (up to 15 seconds)
+                                                    download_complete = False
+                                                    for i in range(30):
+                                                        time.sleep(0.5)
+                                                        if download_path.exists():
+                                                            # Check it's not still downloading (.crdownload)
+                                                            temp_file = Path(str(download_path) + '.crdownload')
+                                                            if not temp_file.exists():
+                                                                download_complete = True
+                                                                break
+
+                                                    if download_complete:
+                                                        file_size = download_path.stat().st_size
+                                                        print(f"    Download complete: {file_size:,} bytes")
+
+                                                        if file_size > 100000:
+                                                            # Rename to desired filename
+                                                            if Path(output_filename).exists():
+                                                                Path(output_filename).unlink()
+                                                            download_path.rename(output_filename)
+                                                            print(f"    Renamed to: {output_filename}")
+                                                            driver.quit()
+                                                            return True
+                                                        else:
+                                                            print(f"    File too small ({file_size} bytes), trying next PDF...")
+                                                            download_path.unlink()
+                                                    else:
+                                                        # Maybe it opened in a new window instead of downloading
+                                                        print(f"    Download not detected, checking for new window...")
+
+                                                    time.sleep(2)  # Wait a bit before checking windows
+                                                    # Get the current URL - if it's a PDF, the browser will navigate to it
+                                                    current_url = driver.current_url
+                                                    print(f"    Current URL after click: {current_url[:100]}...")
+
+                                                    # If we navigated to a PDF, try to download it
+                                                    if current_url.endswith('.pdf'):
+                                                        # Try downloading with session cookies
+                                                        if download_file(current_url, output_filename, driver=driver):
+                                                            file_size = Path(output_filename).stat().st_size
+                                                            if file_size > 100000:
+                                                                driver.quit()
+                                                                return True
+                                                            else:
+                                                                print(f"    File too small ({file_size} bytes), going back...")
+                                                                driver.back()
+                                                                time.sleep(2)
+                                                        else:
+                                                            print(f"    Download failed, going back...")
+                                                            driver.back()
+                                                            time.sleep(2)
+                                                    else:
+                                                        # If it opened in a new tab or frame, try to switch to it
+                                                        print(f"    PDF may have opened in new window/tab")
+                                                        # Try to find if we have multiple windows
+                                                        if len(driver.window_handles) > 1:
+                                                            driver.switch_to.window(driver.window_handles[-1])
+                                                            pdf_url = driver.current_url
+                                                            print(f"    Switched to new window: {pdf_url[:100]}...")
+
+                                                            # PDF is opened in new tab - Chrome should download it automatically
+                                                            try:
+                                                                print(f"    Waiting for PDF to download...")
+
+                                                                # Wait for the download to complete
+                                                                # Chrome downloads PDFs with original filename
+                                                                pdf_filename = Path(pdf_url).name  # e.g., "P21877287.pdf"
+                                                                download_path = Path.cwd() / pdf_filename
+
+                                                                # Wait up to 15 seconds for download to appear
+                                                                download_complete = False
+                                                                for i in range(30):  # 30 * 0.5 = 15 seconds
+                                                                    time.sleep(0.5)
+                                                                    # Check if file exists and is not a .crdownload (temp file)
+                                                                    if download_path.exists():
+                                                                        # Make sure it's not still downloading
+                                                                        temp_file = Path(str(download_path) + '.crdownload')
+                                                                        if not temp_file.exists():
+                                                                            download_complete = True
+                                                                            break
+
+                                                                if download_complete:
+                                                                    file_size = download_path.stat().st_size
+                                                                    print(f"    Download complete: {file_size:,} bytes")
+
+                                                                    if file_size > 100000:
+                                                                        # Rename to our desired filename
+                                                                        download_path.rename(output_filename)
+                                                                        print(f"    Renamed to: {output_filename}")
+                                                                        driver.quit()
+                                                                        return True
+                                                                    else:
+                                                                        print(f"    File too small ({file_size} bytes), trying next PDF...")
+                                                                        download_path.unlink()  # Delete the small file
+                                                                else:
+                                                                    print(f"    Download timed out or failed")
+
+                                                            except Exception as e:
+                                                                print(f"    Download error: {e}")
+
+                                                            # Close the PDF window and switch back
+                                                            driver.close()
+                                                            driver.switch_to.window(driver.window_handles[0])
+                                                            time.sleep(1)
+                                                        else:
+                                                            driver.back()
+                                                            time.sleep(2)
+
+                                                except Exception as e:
+                                                    print(f"    Error accessing PDF: {e}")
+                                                    # Try to go back to the Financial Disclosures page
+                                                    try:
+                                                        if len(driver.window_handles) > 1:
+                                                            driver.close()
+                                                            driver.switch_to.window(driver.window_handles[0])
+                                                        else:
+                                                            driver.back()
+                                                        time.sleep(1)
+                                                    except:
+                                                        pass
+                                                    continue
+
+                                        print("  Could not download any relevant financial reports")
+                                    else:
+                                        print("  No relevant financial reports found after filtering")
+                                else:
+                                    print("  No PDF documents found on Financial Disclosures page")
+                            else:
+                                print("  Could not find Financial Disclosures tab")
+
+                        except Exception as e:
+                            print(f"  Error accessing Financial Disclosures: {e}")
+                            import traceback
+                            traceback.print_exc()
+
+                    except Exception as e:
+                        print(f"  Error clicking on result: {e}")
+                        return False
+                else:
+                    # Multiple results found
+                    print("  Multiple results found. Please refine your search.")
+                    for idx, row in enumerate(actual_results[:5], 1):
+                        try:
+                            link = row.find_element(By.TAG_NAME, "a")
+                            print(f"    {idx}. {link.text}")
+                        except:
+                            pass
+                    return False
+
+            except Exception as e:
+                print(f"  Error counting results: {e}")
+                return False
+
+        except Exception as e:
+            print(f"  Error finding search box: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
         print("  No suitable financial reports found on EMMA")
 
